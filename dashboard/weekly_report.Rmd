@@ -1,6 +1,7 @@
 ---
 title: "Weekly Inquiry Dashboard"
 author: "Wei Fu"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
 output: 
   flexdashboard::flex_dashboard:
     orientation: columns
@@ -9,9 +10,12 @@ output:
     # theme: flatly
     # theme: united
     theme: cosmo
-runtime: shiny
+    vertical_layout: scroll
+# runtime: shiny
 ---
 ```{r setup, include=FALSE}
+
+
 library(highcharter)
 library(tidyverse)
 library(viridisLite)
@@ -23,6 +27,10 @@ library(xts)
 library(colorspace)
 library(lubridate)
 
+library(knitr)
+library(kableExtra)
+library(scales)
+
 thm <- 
   hc_theme(
     # colors = c("#1a6ecc", "#434348", "#90ed7d"),
@@ -30,7 +38,8 @@ thm <-
     colors = c("#E495A5", "#86B875", "#7DB0DD"),
     chart = list(
       backgroundColor = "transparent",
-      style = list(fontFamily = "Source Sans Pro")
+      style = list(fontFamily = "Verdana")
+      #Source Sans Pro
     ),
     xAxis = list(
       gridLineWidth = 1
@@ -38,127 +47,231 @@ thm <-
   )
 
 library(readxl)
-Base <- read_excel("D:/Product/Base.xlsx")
-B<-Base
-names(B)<- str_replace_all(names(B), c("\\\r\\\n" = "." , "," = "", " "="_" ))
+Base <- read_excel("D:/Product/Base.xlsx", 
+     col_types = c("numeric", "numeric", "numeric", 
+         "date", "numeric", "numeric", "date", 
+         "numeric", "numeric", "date", 
+         "numeric", "numeric", "numeric", 
+         "numeric"))
+
+library(stringr)
+#remove space in the cloumn names
+names(Base)<- str_replace_all(names(Base), c("\\\r\\\n" = "." , "," = "", " "="_" ))
+
+B<- Base[, c("Current.Date", "Current_Yr.Inquiries", "Prior_Yr.Inquiries", "Prior_2_Yr.Inquiries")]
+colnames(B)<-c("dt", "cur_cnt", "pr_cnt", "pr2_cnt")
+
+#an xts object can only have numberic data in it. Make sure to remove the date column because it will be converted to a character data type
+# B[, 2:4], B[, -1], B[c(-1)] are equivalent here
+ts<- xts(B[, 2:4], as.Date(B$dt))
 
 ```
+
+
+Weekly
+===================================== 
 
 Column {data-width=600}
 -----------------------------------------------------------------------
 
-### Daily Inquiry Count
-This is for 2020.
+### Moving Average Comparison
+This chart shows 7-day moving averages of inquiries. Slide the levers to zoom or move the time window. Hover to see the years and data values.
 
 ```{r}
 
-cur<-as.xts(B$Current_Yr.Inquiries, as.Date(B$Current.Date))
-plot(cur, pch=20, col='blue', bg="grey87", main="")
-#main="" gets rid of the series name "cur"
-title(main="Daily Count")
+# colnames(ts)<-c("2020", "2019", "2018")
+# plot.xts(ts, col=c("red", "blue", "orange"), bg="grey87", main=NULL, legend.loc = "topleft")
+# #main=NULL or "" gets rid of the series name 
+# title(main="Daily Count")
 
-```
+#line up dates by week number and week day
+#week and wday are functions in package lubridate
+d1 <-data.frame(DATE=Base$Current.Date, WK=epiweek(Base$Current.Date), WD=wday(Base$Current.Date), CNT2020=Base$Current_Yr.Inquiries)
+d2 <-data.frame(WK=epiweek(Base$Prior_Yr.Date), WD=wday(Base$Prior_Yr.Date), CNT2019=Base$Prior_Yr.Inquiries)
+d3 <-data.frame(WK=epiweek(Base$Prior_2_Yr.Date), WD=wday(Base$Prior_2_Yr.Date), CNT2018=Base$Prior_2_Yr.Inquiries)
 
-### Sales Forecast
+# make 12/29/2019 week 53 instead of week 1
+flag<-(as.numeric(rownames(d2))>max(as.numeric(rownames(d2[which(d2$WK==52), ]))))
+d2[(flag),]$WK <- d2[(flag),]$WK + 52
 
-```{r global, include=FALSE}
+flag2<-(as.numeric(rownames(d3))>max(as.numeric(rownames(d3[which(d3$WK==52), ]))))
+d3[(flag2), ]$WK<-d3[(flag2),]$WK +52
 
-# generating forecast
-p <- forecast(AirPassengers, h=12, level = 95)
+#join by week number and week day, Feb 29 is not a problem
+cmb<- left_join(d1, d2, by=c("WK", "WD")) %>% 
+  left_join(d3, by=c("WK", "WD"))
 
-# obtain forecasts and prdiction intervals
-pd <- summary(p)
+cmb_ts <- xts(cmb[, c(2:6)], as.Date(cmb$DATE))
 
-# convert to xts class for dygraph to use
-# class of pd is data frame
-pdts <- xts(pd, as.Date(paste("01", rownames(pd)), "%d %b %Y"))
-# class of Airpassengers is ts
-ts1<- as.xts(AirPassengers)
+#create 7-day moving average
+ma<-stats::filter(cmb_ts[, 3:5], filter=c(1/7, 1/7, 1/7, 1/7, 1/7, 1/7, 1/7), sides=1)
 
-# merge two time series together by index
-ts3<-merge(ts1, pdts)
-```
+#append dates to ma
+ma_xts <- xts(cbind(cmb_ts, ma), as.Date(index(cmb_ts)))
+#give names to MA columns
+colnames(ma_xts)[6:8]<-c("MA_CUR", "MA_PR", "MA_PR2")
 
-```{r}
-dygraph(ts3, main = "Airpassengers", xlab = "Month") %>%
-  dyRangeSelector(dateWindow = c("1949-01-01", "1963-01-01")) %>%
-  # dyRoller(showRoller = TRUE, rollPeriod = 12) %>%
-  dySeries("ts1", label = "Mean Forecast") %>%
-  dySeries(c("Lo.95", "Point.Forecast", "Hi.95"), label = "Prediction Interval")
 
-```
-
-### Sales by State
-
-```{r}
-data("USArrests", package = "datasets")
-data("usgeojson")
-
-USArrests <- USArrests %>%
-  mutate(state = rownames(.))
-
-n <- 4
-colstops <- data.frame(
-  q = 0:n/n,
-  c = substring(viridis(n + 1), 0, 7)) %>%
-  list_parse2()
-#viridis, magma, plasma, and inferno are palettes in Viridis
-
-highchart() %>%
-  hc_add_series_map(usgeojson, USArrests, name = "Sales",
-                    value = "Murder", joinBy = c("woename", "state"),
-                    dataLabels = list(enabled = TRUE,
-                                      format = '{point.properties.postalcode}')) %>%
-  hc_colorAxis(stops = colstops) %>%
-  hc_legend(valueDecimals = 0, valueSuffix = "%") %>%
-  hc_mapNavigation(enabled = TRUE) %>%
+#ma chart, multiple series
+highchart(type="stock") %>% 
+  hc_xAxis(categories=as.Date(index(ma_xts), format="%d %b %Y")) %>%
+  hc_add_series(name="2020", data=ma_xts$MA_CUR) %>% 
+  hc_add_series(name="2019", data=ma_xts$MA_PR) %>%
+  hc_add_series(name="2018", data=ma_xts$MA_PR2) %>%
   hc_add_theme(thm)
+
 ```
+
+### MA YOY Comparison
+
+This chart shows the 7-day moving average of this year compared to that of the prior year.
+```{r}
+
+
+#ratio of 2020 over 2019; append index from cm_ts because they have the same length
+r1 <- xts(ma[,1]/ma[,2], as.Date(index(cmb_ts)))
+
+r1 %>% 
+  # forecast(level = 90) %>% 
+  hchart(color="orangered", style=(list(fontFamily = "Verdana"))) %>%
+  # {"fontFamily": "\"Lucida Grande\", \"Lucida Sans Unicode\", Verdana, Arial, Helvetica, sans-serif","fontSize":"12px"}.
+  hc_title(text="7-Day MA YOY%", style=(list(fontFamily = "Helvetica"))) 
+
+```
+
+
 
 Column {.tabset data-width=400}
 -----------------------------------------------------------------------
 
-### Sales by Category
+### Weekly Changes
 
-<!-- ```{r, fig.keep='none'} -->
-<!-- data("Groceries", package = "arules") -->
-<!-- dfitems <- tbl_df(Groceries@itemInfo) -->
+```{r}
+#calculate weekly ratios
+wkly <- subset(ma_xts, WD==7, select = c(WK, WD, MA_CUR, MA_PR, MA_PR2))
+wkly$MA_YOY <- (wkly$MA_CUR/wkly$MA_PR)-1
 
-<!-- set.seed(10) -->
+wkly$MA_PRV_WK <-lag(wkly$MA_CUR, k=1)
+wkly$MA_WOW <- (wkly$MA_CUR/wkly$MA_PRV_WK)-1
 
-<!-- dfitemsg <- dfitems %>% -->
-<!--   mutate(category = gsub(" ", "-", level1), -->
-<!--          subcategory = gsub(" ", "-", level2)) %>% -->
-<!--   group_by(category, subcategory) %>% -->
-<!--   summarise(sales = n() ^ 3 ) %>% -->
-<!--   ungroup() %>% -->
-<!--   sample_n(31) -->
+#percent_format only accepts numeric data type not xts
+p<- data.frame(cbind(as.numeric(wkly$WK), percent_format(accuracy=0.1)(as.numeric(wkly$MA_YOY)), percent_format(accuracy=0.1)(as.numeric(wkly$MA_WOW))))
+colnames(p)<-c("WK", "MA_YOY_PCT", "MA_WOW_PCT")
 
-<!-- tm <- treemap(dfitemsg, index = c("category", "subcategory"), -->
-<!--               vSize = "sales", vColor = "sales", -->
-<!--               type = "value", palette = rev(viridis(6))) -->
 
-<!-- highchart() %>% -->
-<!--   # hctreemap2 -->
-<!--   hc_add_series_treemap(tm, allowDrillToNode = TRUE, -->
-<!--                         layoutAlgorithm = "squarified") %>% -->
-<!--   hc_add_theme(thm) -->
-<!-- ``` -->
+p %>%
+subset(MA_YOY_PCT!="NA%", select=c(WK, MA_YOY_PCT, MA_WOW_PCT)) %>%
+  knitr::kable(caption="% Change in Weekly Average", escape = FALSE, col.names=c("Week", "Year Over Year %", "Over Previous Week %"),row.names = FALSE, align="c") %>%
+  kable_styling(fixed_thead = list(enabled = T, background = "skyblue"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+  # fixed_header = list(enabled = T, background = "black")  
+  column_spec(2, bold = T, border_right = F) 
 
-### Best Sellers
+```
 
-<!-- ```{r} -->
-<!-- set.seed(2) -->
+### Weekly Average 
 
-<!-- nprods <- 10 -->
+```{r}
+#covert wkly to a data frame because digits=0 won't work on xts
+data.frame(wkly) %>%
+subset(!is.na(MA_CUR), select=c(WK, MA_CUR, MA_PR, MA_PR2)) %>%
+  knitr::kable(caption="Weekly Average Count for Three Years", escape = FALSE, col.names=c("Week", "Current Year", "Prior Year", "Prior Year 2"), digits=0, align="c") %>%
+  kable_styling(fixed_thead = list(enabled = T, background = "skyblue"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+  # fixed_header = list(enabled = T, background = "black")  
+  column_spec(2, bold = T, border_right = F) 
 
-<!-- dfitems %>% -->
-<!--   sample_n(nprods) %>% -->
-<!--   .$labels %>% -->
-<!--   rep(times = sort(sample( 1e4:2e4, size = nprods), decreasing = TRUE)) %>% -->
-<!--   factor(levels = unique(.)) %>% -->
-<!--   hchart(showInLegend = FALSE, name = "Sales", pointWidth = 10) %>% -->
-<!--   hc_add_theme(thm) %>% -->
-<!--   hc_chart(type = "bar") -->
+```
 
-<!-- ``` -->
+Daily
+===================================== 
+
+Column {data-width=600  data-height=350}
+-----------------------------------------------------------------------
+
+### Daily Count
+The unsmoothed daily counts exhibit clear weekly cycles. The series are matched by week number and week day.
+
+
+```{r}
+highchart(type="stock") %>% 
+  hc_xAxis(categories=as.Date(index(ma_xts), format="%d %b %Y")) %>%
+  hc_add_series(name="2018", data=ma_xts$CNT2018) %>%
+  hc_add_series(name="2019", data=ma_xts$CNT2019) %>%
+  hc_add_series(name="2020", data=ma_xts$CNT2020) %>% 
+  hc_legend(enable=TRUE, align = "center", verticalAlign = "top",
+            layout = "vertical", x=0, y=100) %>%
+  hc_add_theme(thm)
+
+```
+
+### YTD Comparison {data-height=350}
+
+```{r}
+
+#running total
+
+B$pr_cnt[which(B$dt==as.Date("2020-02-29"))]<-0
+B$pr2_cnt[which(B$dt==as.Date("2020-02-29"))]<-0
+B$WK<-epiweek(B$dt)
+B$WD<-wday(B$dt)
+B$CUR_YTD<-cumsum(B$cur_cnt)
+B$PR_YTD <-cumsum(B$pr_cnt)
+B$YTD_YOY<- percent_format(accuracy=0.01)(as.numeric((B$CUR_YTD/B$PR_YTD)-1))
+
+# ma_xts$CUR_YTD<- cumsum(ma_xts$CNT2020)
+# ma_xts$PR_YTD<- cumsum(ma_xts$CNT2019)
+# 
+# ma_xts[,c("CUR_YTD", "PR_YTD")]%>%
+
+B2<-xts(B[, -1], as.Date(B$dt))
+
+B2[,c("CUR_YTD", "PR_YTD")]%>%
+dygraph(main = "YTD Running Total", xlab = "Date") %>%
+  dyRangeSelector(dateWindow = c("2020-01-01", "2020-12-31")) %>%
+  #dyRoller(showRoller = TRUE, rollPeriod = 12) %>%
+  dySeries("CUR_YTD", label = "2020", color = "orangered") %>%
+  dySeries("PR_YTD", label = "2019")
+
+```
+
+
+Column {.tabset data-width=400}
+-----------------------------------------------------------------------
+### YTD YOY Change {data-height=350}
+
+Only the current month is included for brevity.
+
+```{r}
+
+
+# #must use as.numeric because percent_format only works on numeric data type not xts
+# y <-data.frame(Date=as.Date(index(ma_xts)), CUR_YTD = ma_xts$CUR_YTD, PR_YTD=ma_xts$PR_YTD, YTD_YOY=percent_format(accuracy=0.01)(as.numeric((ma_xts$CUR_YTD/ma_xts$PR_YTD)-1)))
+
+# #the whole chart is way too long. Limiting to just the current month
+# y %>%
+# subset(!is.na(CUR_YTD) & month(y$Date)==month(today()), select=c(CUR_YTD, PR_YTD, YTD_YOY)) %>%
+
+B %>%
+  subset(!is.na(CUR_YTD) & month(B$dt)==month(today()), select=c(dt, CUR_YTD, PR_YTD, YTD_YOY)) %>%
+  knitr::kable(caption="Year-to-Date Change Over Prior Year", escape = FALSE, col.names=c("Date", "Current Year YTD", "Prior Year YTD", "YOY %"), digits=0, align="c") %>%
+  kable_styling(fixed_thead = list(enabled = T, background = "skyblue"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+  # fixed_header = list(enabled = T, background = "black")  
+  column_spec(2, bold = T, border_right = F) 
+
+
+
+```
+
+
+### YTD YOY By Week {data-height=350}
+
+```{r}
+
+B[which(B$WD==7), ] %>%
+subset(!is.na(CUR_YTD), select=c(dt, WK, YTD_YOY)) %>%
+  knitr::kable(caption="YOY Change By Week", escape = FALSE, col.names=c("Date","Week", "YTD YOY %"), row.names = FALSE, align = "c") %>%
+  kable_styling(fixed_thead = list(enabled = T, background = "skyblue"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+  # fixed_header = list(enabled = T, background = "black")  
+  column_spec(2, bold = T, border_right = F) 
+
+```
+
