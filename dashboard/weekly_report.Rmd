@@ -105,6 +105,7 @@ cmb_ts <- xts(cmb[, c(2:6)], as.Date(cmb$DATE))
 
 #create 7-day moving average
 ma<-stats::filter(cmb_ts[, 3:5], filter=c(1/7, 1/7, 1/7, 1/7, 1/7, 1/7, 1/7), sides=1)
+ma<-xts(ma, as.Date(cmb$DATE))
 
 #append dates to ma
 ma_xts <- xts(cbind(cmb_ts, ma), as.Date(index(cmb_ts)))
