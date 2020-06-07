@@ -115,10 +115,29 @@ colnames(ma_xts)[6:8]<-c("MA_CUR", "MA_PR", "MA_PR2")
 
 #ma chart, multiple series
 highchart(type="stock") %>% 
-  hc_xAxis(categories=as.Date(index(ma_xts), format="%d %b %Y")) %>%
-  hc_add_series(name="2020", data=ma_xts$MA_CUR) %>% 
+  # hc_xAxis(categories=as.Date(index(ma_xts), format="%d %b %Y")) %>%
+  # hc_xAxis(categories=datetime_to_timestamp(as.Date(index(ma_xts)))) %>%
+  hc_xAxis(minRange=1) %>%
+  # hc_add_series(name="2020", data=ma_xts$MA_CUR, dataLabels =list(enabled = TRUE, format='{point.y:.2f}')) %>% 
+  hc_add_series(name="2020", data=ma_xts$MA_CUR, showInLegend = TRUE) %>% 
   hc_add_series(name="2019", data=ma_xts$MA_PR) %>%
   hc_add_series(name="2018", data=ma_xts$MA_PR2) %>%
+  hc_annotations(
+    list(
+      labelOptions = list(
+      backgroundColor = 'rgba(255,255,255,0.5)',
+      verticalAlign = 'top',
+      y = 10,
+      shape = "callout",
+      fill = "none"
+    ),
+      labels = list(
+               list(point = list(x =datetime_to_timestamp(as.Date("2020-04-10")), y = 30000, xAxis = 0, yAxis = 0), text = "2020 Good Friday"),
+               list(point = list(x = datetime_to_timestamp(as.Date("2020-05-25")), y = 28000, xAxis = 0, yAxis = 0), text = "2020 Memorial Day")
+      )
+    )
+  ) %>%
+  hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">{series.name}</span>: {point.y:.2f}") %>%
   hc_add_theme(thm)
 
 ```
@@ -152,7 +171,7 @@ Column {.tabset data-width=400}
 wkly <- subset(ma_xts, WD==7, select = c(WK, WD, MA_CUR, MA_PR, MA_PR2))
 wkly$MA_YOY <- (wkly$MA_CUR/wkly$MA_PR)-1
 
-wkly$MA_PRV_WK <-lag(wkly$MA_CUR, k=1)
+wkly$MA_PRV_WK <-lag.xts(wkly$MA_CUR, k=1)
 wkly$MA_WOW <- (wkly$MA_CUR/wkly$MA_PRV_WK)-1
 
 #percent_format only accepts numeric data type not xts
@@ -242,7 +261,6 @@ Column {.tabset data-width=400}
 Only the current month is included for brevity.
 
 ```{r}
-
 
 # #must use as.numeric because percent_format only works on numeric data type not xts
 # y <-data.frame(Date=as.Date(index(ma_xts)), CUR_YTD = ma_xts$CUR_YTD, PR_YTD=ma_xts$PR_YTD, YTD_YOY=percent_format(accuracy=0.01)(as.numeric((ma_xts$CUR_YTD/ma_xts$PR_YTD)-1)))
