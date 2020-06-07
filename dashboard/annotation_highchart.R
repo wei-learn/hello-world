@@ -4,8 +4,8 @@ library(xts)
 
 dt<- seq(as.Date("2017-01-01"), as.Date("2017-01-05"), "days")
 n<-length(dt)
-x <- xts(rnorm(n), order.by=dt)
-y <- xts(rnorm(n)+1, order.by=dt)
+x <- xts(1000*rnorm(n)+20000, order.by=dt)
+y <- xts(1000*rnorm(n)+25000, order.by=dt)
 
 highchart(type = "stock") %>% 
   hc_add_annotation(
@@ -20,7 +20,7 @@ highchart(type = "stock") %>%
           xAxis = 0,
           yAxis = 0,
           x = datetime_to_timestamp(as.Date("2017/01/02")),
-          y = 1.5
+          y = 25000
         ),
         text = "Some annotation",
 	  shape = "connector"
@@ -32,7 +32,7 @@ highchart(type = "stock") %>%
              xAxis = 0,
              yAxis = 0,
              x = datetime_to_timestamp(as.Date("2017/01/03")),
-             y = 1
+             y = 20000
         ),
            type = "circle",
            r = 10,
