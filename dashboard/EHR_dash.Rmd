@@ -1,0 +1,275 @@
+---
+title: "Weekly Inquiry Dashboard"
+author: "Wei Fu"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social: menu
+    source_code: embed
+    theme: flatly
+    #theme: united
+    #theme: cosmo
+    vertical_layout: scroll
+# runtime: shiny
+---
+
+```{r setup, include=FALSE}
+
+library(flexdashboard)
+library(highcharter)
+library(tidyverse)
+library(viridisLite)
+library(forecast)
+library(treemap)
+
+library(dygraphs)
+library(xts)
+library(colorspace)
+library(lubridate)
+
+library(knitr)
+library(kableExtra)
+library(scales)
+
+thm <- 
+  hc_theme(
+    # colors = c("#1a6ecc", "#434348", "#90ed7d"),
+     colors = rainbow_hcl(7),
+    # colors = c("#E495A5", "#86B875", "#7DB0DD"),
+    chart = list(
+      backgroundColor = "transparent",
+      style = list(fontFamily = "mono")
+      #Source Sans Pro
+      #mono
+      #Verdana
+    ),
+    xAxis = list(
+      gridLineWidth = 1
+    )
+  )
+
+library(readxl)
+
+ehrin <- "D:/Projects/EHR/EHR Metrics by Week 09072020.xlsx"
+comp <- read_excel(ehrin, 
+    sheet = "Company Symbol Lookup", col_types = c("text", 
+        "text", "text", "text", "text", "text", 
+        "text", "text", "date"))
+#View(EHR_Metrics_by_Week_09_03)
+
+Metrics <- read_excel(ehrin, 
+    sheet = "Companies by Week", col_types = c("text", 
+        "date", "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "blank"))
+#View(Metrics)
+
+
+#join by company symbol to get company name
+names(Metrics)[colnames(Metrics) == "primary_member_company_symbol"] <- "Company_Symbol"
+
+cmb<- left_join(Metrics, comp, by="Company_Symbol") 
+
+
+# library(xlsx)
+# write.xlsx(cmb, paste("D:/Projects/EHR/temp", today(), ".xlsx", sep=""))
+
+library(stringr)
+#remove space in the cloumn names
+names(cmb)<- str_replace_all(names(cmb), c("\\\r\\\n" = "." , "," = "", " "="_" ))
+cmb$Request_date_by_week <- as.Date(cmb$Request_date_by_week)
+ 
+# one company may be associated with multiple company symbols.
+# Need to group them together
+cmb$Company <-ifelse(cmb$Company_Symbol %in% c("16", "16S2S"), "NWM", 
+                     ifelse(cmb$Company_Symbol %in% c("75E"), "Pacific_Life",
+                     ifelse(cmb$Company_Symbol %in% c("EY", "T93"), "Protective", 
+                     ifelse(cmb$Company_Symbol %in% c("LF"), "American_Income",
+                     ifelse(cmb$Company_Symbol %in% c("B9", "FD"), "Banner", "Other")))))
+
+
+
+
+```
+
+
+Weekly
+===================================== 
+
+Row {data-height=650}
+-----------------------------------------------------------------------
+
+### Weekly Request Volumes
+
+
+```{r}
+
+#grouping by company and filter to last 8 weeks
+mwk <-max(cmb$Request_date_by_week)
+cmb2 <- cmb %>%
+      filter((mwk- Request_date_by_week) <56) %>%
+      group_by(Company, Request_date_by_week) %>%
+      summarise(Volume = sum(`#_request_submitted`), na.rm=FALSE) %>%
+      select(Company, Request_date_by_week, Volume) %>%
+      arrange(desc(Request_date_by_week), Company)
+
+#transpose, fill missing with 0
+w<- pivot_wider(cmb2, names_from = Company, values_from=Volume, values_fill=0)
+
+#reorder the columns to put other to the right
+w<- w[, c("Request_date_by_week", "American_Income", "NWM", 
+          "Pacific_Life", "Protective", "Other")]
+#w<- w[, c("Request_date_by_week", "American_Income", "NWM", 
+#          "Pacific_Life", "Protective", "Banner", "Other")]
+
+
+# library(describedata)
+# wkttl <-proc_means(cmb2[names(cmb2) != "Company"], vars = "Volume", by="Request_date_by_week")
+# cmpttl <- proc_means(cmb2, vars = "Volume", by="Company")
+############ proc_means has not sum funciton
+
+#get weekly totals. but this requires merging witht he original df
+# wkv <- cmb2 %>%
+#        group_by(Request_date_by_week) %>%
+#        summarise(Weekly_Total=sum(Volume)) %>%
+#        arrange(desc(Request_date_by_week))
+
+#creating rowSums
+w2 <- w %>%
+    mutate(Total = select(., !(Request_date_by_week)) %>% rowSums(na.rm = TRUE))
+
+colttl <- cbind(data.frame(Request_date_by_week=as.Date(0)), data.frame(summarise(w2, across(!(Request_date_by_week), sum))))
+
+
+w3<-rbind(w2, colttl)
+w3$Request_date_by_week <- as.character(w3$Request_date_by_week)
+w3[which(as.Date(w3$Request_date_by_week)==as.Date(0)),]$Request_date_by_week <-"Grand Total"
+
+#rmax <- max(as.numeric(rownames(w3)))
+
+w3 %>%
+  #mutate(Total=cell_spec(Total, "html", bold=T, italic = T)) %>%
+   knitr::kable(caption="Table 1 Top Companies vs. Others Weekly Volume", escape = FALSE, col.names=c("Week", "American Income", "Northwest Mutual", "Pacific Life", "Protective", "Other", "Total"),row.names = FALSE, align="c") %>%
+   kable_styling(full_width = F, position = "center", fixed_thead = list(enabled = T, background = "azure"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+   column_spec(7, bold = F, border_left = T, background = "ivory") %>%
+   row_spec(9, bold= T, italic = T, background = "ivory")
+
+```
+_Top 5 companies include American Income, Northewest Mutual, Pacific Life, Protective, and Banner by business decision._
+
+### Weekly Volume Trend
+
+
+```{r}
+
+ts<- xts(w[, 2:6], as.Date(w$Request_date_by_week))
+
+#volume chart, multiple series
+highchart(type="stock") %>% 
+#  hc_xAxis(categories=as.Date(index(ts), format="%Y-%m-%d")) %>%
+  hc_title(text="Volume Trend Over Last 8 Weeks", style=(list(fontFamily = "Helvetica")))  %>%
+  hc_xAxis(minRange=1) %>%
+  # hc_add_series(name="2020", data=ma_xts$MA_CUR, dataLabels =list(enabled = TRUE, format='{point.y:.2f}')) %>% 
+  hc_add_series(name="American Income", data=ts$American_Income, showInLegend = TRUE) %>% 
+  hc_add_series(name="Northwest Mutual", data=ts$NWM) %>%
+  hc_add_series(name="Pacific Life", data=ts$Pacific_Life) %>%
+  hc_add_series(name="Protective", data=ts$Protective) %>%
+  hc_add_series(name="Other", data=ts$Other) %>%
+  hc_add_theme(thm)
+
+  # 
+  # hc_annotations(
+  #   list(
+  #     labelOptions = list(
+  #     backgroundColor = 'rgba(255,255,255,0.5)',
+  #     verticalAlign = 'top',
+  #     y = 10,
+  #     shape = "callout",
+  #     fill = "none"
+  #   ),
+  #     labels = list(
+  #              list(point = list(x =datetime_to_timestamp(as.Date("2020-04-10")), y = 30000, xAxis = 0, yAxis = 0), text = "2020 Good Friday"),
+  #              list(point = list(x = datetime_to_timestamp(as.Date("2020-05-25")), y = 28000, xAxis = 0, yAxis = 0), text = "2020 Memorial Day")
+  #     )
+  #   )
+  # ) %>%
+  # hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">{series.name}</span>: {point.y:.2f}") %>%
+
+
+
+```
+
+Row {data-height=650}
+-----------------------------------------------------------------------
+
+### Weekly Growth
+
+
+```{r}
+lwk <- w2 %>%
+     mutate(across(.cols = !(Request_date_by_week), ~lead(.x, n=1L)))
+
+names(lwk)[2:6]<- as.character((lapply(names(lwk[c(2:6)]), function(x) paste(x, "_Pr_Wk", sep = ""))))
+
+grow <- cbind(lwk[1], w2[c(-1)]/lwk[c(-1)]-1)
+
+grow2<- grow %>%
+       mutate(across(.cols = !(Request_date_by_week), ~percent_format(accuracy = 1)(.x)))
+
+grow2[which(!is.na(grow$Total)),] %>%
+  #mutate(Total=cell_spec(Total, "html", bold=T, italic = T)) %>%
+   knitr::kable(caption="Table 2 Top Companies vs. Others Weekly Growth", escape = FALSE, col.names=c("Week", "American Income", "Northwest Mutual", "Pacific Life", "Protective", "Other", "Total"),row.names = FALSE, align="c") %>%
+   kable_styling(full_width = F, position = "center", fixed_thead = list(enabled = T, background = "#ccffe6"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+   column_spec(7, bold = F, border_left = T, background = "ivory") 
+
+
+```
+
+### Growth Trend
+
+```{r}
+
+grow3<- grow[which(!is.na(grow$Total)), ]
+ts2<- xts(grow3[, 2:6], as.Date(grow3$Request_date_by_week))
+
+#volume chart, multiple series
+highchart(type="stock") %>% 
+  # hc_xAxis(categories=as.Date(index(ts2), format="%Y-%m-%d")) %>%
+  hc_title(text="% Change in Volume Over Last 8 Weeks", style=(list(fontFamily = "Lucida Sans Unicode")))  %>%
+  hc_xAxis(minRange=1) %>%
+  # hc_add_series(name="2020", data=ma_xts$MA_CUR, dataLabels =list(enabled = TRUE, format='{point.y:.2f}')) %>% 
+  hc_add_series(name="American Income", data=ts2$American_Income, showInLegend = TRUE) %>% 
+  hc_add_series(name="Northwest Mutual", data=ts2$NWM) %>%
+  hc_add_series(name="Pacific Life", data=ts2$Pacific_Life) %>%
+  hc_add_series(name="Protective", data=ts2$Protective) %>%
+  hc_add_series(name="Other", data=ts2$Other) %>%
+  hc_add_theme(thm) %>%
+  hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">{series.name}</span>: {point.y:.2f}") 
+
+  # 
+  # hc_annotations(
+  #   list(
+  #     labelOptions = list(
+  #     backgroundColor = 'rgba(255,255,255,0.5)',
+  #     verticalAlign = 'top',
+  #     y = 10,
+  #     shape = "callout",
+  #     fill = "none"
+  #   ),
+  #     labels = list(
+  #              list(point = list(x =datetime_to_timestamp(as.Date("2020-04-10")), y = 30000, xAxis = 0, yAxis = 0), text = "2020 Good Friday"),
+  #              list(point = list(x = datetime_to_timestamp(as.Date("2020-05-25")), y = 28000, xAxis = 0, yAxis = 0), text = "2020 Memorial Day")
+  #     )
+  #   )
+  # ) %>%
+
+
+
+
+
+```
+
+
+Monthly
+===================================== 
