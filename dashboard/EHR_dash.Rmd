@@ -35,6 +35,8 @@ library(scales)
 
 library(ggplot2)
 library(plotly)
+library(data.table)
+
 thm <- 
   hc_theme(
     # colors = c("#1a6ecc", "#434348", "#90ed7d"),
@@ -54,7 +56,7 @@ thm <-
 
 library(readxl)
 
-ehrin <- "D:/Projects/EHR/Weekly/weekly_10072020.xlsx"
+ehrin <- "D:/Projects/EHR/Weekly/weekly_10112020.xlsx"
 comp <- read_excel(ehrin, 
     sheet = "Company Symbol Lookup", col_types = c("text", 
         "text", "text", "text", "text", "text", 
@@ -108,6 +110,27 @@ cmb$Company <-ifelse(cmb$Company_Symbol %in% c("16", "16S2S"), "NWM",
 
 # the most recent week
 mwk <-as.Date(ifelse(difftime(today(),max(cmb$Request_date_by_week), units = "days") <7, max(cmb$Request_date_by_week)-7, max(cmb$Request_date_by_week)))
+
+
+
+Vendor$request_date_by_week <- as.Date(Vendor$request_date_by_week)
+
+
+#join by company symbol to get company name
+names(Vendor)[colnames(Vendor) == "company_code"] <- "Company_Symbol"
+
+library(data.table)
+cvdr<- left_join(Vendor, comp, by="Company_Symbol") %>%
+      filter(!(Company_Symbol %ilike% "^MIB" | Company_Symbol %ilike% "PEN$"))
+
+
+# one company may be associated with multiple company symbols.
+# Need to group them together
+cvdr$Company <-ifelse(cvdr$Company_Symbol %in% c("16", "16S2S"), "NWM", 
+                     ifelse(cvdr$Company_Symbol %in% c("75E"), "Pacific_Life",
+                     ifelse(cvdr$Company_Symbol %in% c("EY", "T93"), "Protective", 
+                     ifelse(cvdr$Company_Symbol %in% c("LF"), "American_Income",
+                     ifelse(cvdr$Company_Symbol %in% c("B9", "FD"), "Banner", "Other")))))
 
 ```
 
@@ -235,10 +258,11 @@ Row {.tabset .tabset-fade .tabset-dropdown data-height=600}
 
 ```{r}
 
-Vendor$request_date_by_week <- as.Date(Vendor$request_date_by_week)
 
-cmbn2 <- Vendor %>%
-      filter( (mwk - request_date_by_week) <56 & (mwk - request_date_by_week) >=0 ) %>%
+
+
+cmbn2 <- cvdr %>%
+      filter( (mwk - request_date_by_week) <56 & (mwk - request_date_by_week) >=0 & !(Company_Symbol %ilike% "^MIB" | Company_Symbol %ilike% "PEN$")) %>%
       group_by(vendor_name, request_date_by_week) %>%
       summarise(Request = sum(num_request_submitted, na.rm=FALSE),                                                     Hit=sum(num_requests_with_one_or_more_records_found),                                                  Req_w_Rls=sum(num_requests_with_one_or_more_records_released),
                 Release = sum(num_records_released)) %>%
@@ -294,7 +318,7 @@ v3 <- cbind(v3["request_week"], v3[, !(colnames(v3) %ilike% "week$")])
 #rmax <- max(as.numeric(rownames(w3)))
 
 v4 <- v3 %>%
-       mutate(across(.cols = ends_with("Rate"), ~percent_format(accuracy = 0.1)(.x))) %>%
+       mutate(across(.cols = ends_with("Rate"), ~percent_format(accuracy = 1)(.x))) %>%
        mutate(across(.cols = ends_with("Avg_Rls_Req"), ~round(.x, digits = 1))) %>%
        select(!ends_with(c("Hit", "Release", "Rls")))
 
@@ -328,17 +352,169 @@ v4 %>%
 ```{r}
 
 chr <- cmb %>%
-      filter( (mwk - request_date_by_week) <56 & (mwk - request_date_by_week) >=0 ) %>%
-      group_by(Company, request_date_by_week) %>%
-      summarise(Request = sum(`#_request_submitted`, na.rm=FALSE),                                                     Hit=sum(`#_requests_with_one_or_more_Records_Found`),                                                  Req_w_Rls=sum(`#_requests_with_one_or_more_Records_Released`),
-                Release = sum(`Records_Released`)) %>%
+      filter( (mwk - Request_date_by_week) <56 & (mwk - Request_date_by_week) >=0) %>%
+      group_by(Company, Request_date_by_week) %>%
+      summarise(Request = sum(`#_request_submitted`, na.rm=FALSE),                                                     Hit=sum(`#_requests_with_1_or_more_Records_Found`),                                                  Req_w_Rls=sum(`#_requests_with_1_or_more_Records_Released`),
+                Release = sum(`#_Records_Released`)) %>%
       mutate(Hit_Rate=Hit/Request, Release_Rate=Req_w_Rls/Request, Avg_Rls_Req = Release/Req_w_Rls) %>%
-      select(vendor_name, request_date_by_week, Request, Hit, Release, Req_w_Rls, Hit_Rate, Release_Rate, Avg_Rls_Req) %>%
-      arrange(desc(request_date_by_week), Company)
+      select(Company, Request_date_by_week, Request, Hit, Release, Req_w_Rls, Hit_Rate, Release_Rate, Avg_Rls_Req) %>%
+      arrange(desc(Request_date_by_week), Company)
 
+
+
+#transpose, fill missing with 0
+v<- pivot_wider(chr, names_from = Company, names_sort = TRUE, names_glue = "{Company}_{.value}", values_from=c(Request, Hit, Release, Req_w_Rls, Hit_Rate, Release_Rate, Avg_Rls_Req), values_fill=0)
+
+names(v)<- str_replace_all(names(v), c("\\\r\\\n" = "." , "," = "", " "="_" ))
+
+v_temp <- v[, names(v) != "Request_date_by_week" & !(colnames(v) %ilike% "^Other")]
+v <- cbind(v["Request_date_by_week"], v_temp[, order(colnames(v_temp))], v[, colnames(v) %ilike% "^Other"])
+
+
+# create totals for each company
+vttl <- chr %>%
+        group_by(Company) %>%
+        summarise(across(Request:Req_w_Rls, sum)) %>%
+        mutate(Hit_Rate=Hit/Request, Release_Rate=Req_w_Rls/Request, 
+               Avg_Rls_Req = Release/Req_w_Rls) %>%
+        arrange(Company)
+
+vtw<- pivot_wider(vttl, names_from = Company, names_sort = TRUE, names_glue = "{Company}_{.value}", values_from=c(Request, Hit, Release, Req_w_Rls, Hit_Rate, Release_Rate, Avg_Rls_Req), values_fill=0)
+
+names(vtw)<- str_replace_all(names(vtw), c("\\\r\\\n" = "." , "," = "", " "="_" ))
+
+vtw <- vtw[, order(colnames(vtw))]
+
+colttl <- cbind(data.frame(Request_date_by_week=as.Date(0)), vtw)
+
+
+# v3<-rbind(v2[, colnames(v2) %ilike% "^request"| colnames(v2) %ilike% "Request$" | colnames(v2) %ilike% "Rls$" | colnames(v2) %ilike% "Release$"], colttl)
+# ^ means beginning with, $ means ending with
+
+v3 <- rbind(v, colttl)
+
+
+v3$request_week <- as.character(v3$Request_date_by_week)
+v3[which(as.Date(v3$request_week)==as.Date(0)),]$request_week <-"Grand Total"
+
+v3 <- cbind(v3["request_week"], v3[, !(colnames(v3) %ilike% "week$")])
+
+#rmax <- max(as.numeric(rownames(w3)))
+
+v4 <- v3 %>%
+       mutate(across(.cols = ends_with("Rate"), ~percent_format(accuracy = 1)(.x))) %>%
+       mutate(across(.cols = ends_with("Avg_Rls_Req"), ~round(.x, digits = 1))) %>%
+       select(!ends_with(c("Hit", "Release", "Rls")))
+
+v4 %>%
+  #mutate(Total=cell_spec(Total, "html", bold=T, italic = T)) %>%
+   knitr::kable(caption="Table 2 Company Performance", escape = FALSE, col.names=c("Week",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request"),row.names = FALSE, align="c") %>%
+   add_header_above(c(" " = 1, "American Income"=4, "Banner"=4, "NWM"=4,
+                      "Pacific Life"=4, "Protective"=4, "Other"=4)) %>%
+   kable_styling(full_width = F, position = "center", fixed_thead = list(enabled = T, background = "#ccffe6"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+#   column_spec(17, bold = F, border_left = T, background = "ivory") %>%
+   row_spec(9, bold= T, italic = T, background = "ivory")
 
 
 ```
+
+
+### Company by Vendor 
+
+```{r}
+
+cvdr$Company2 <-ifelse(cvdr$Company_Symbol %in% c("16", "16S2S"), "NWM", 
+                     ifelse(cvdr$Company_Symbol %in% c("75E"), "Pacific_Life",
+                     ifelse(cvdr$Company_Symbol %in% c("EY", "T93"), "Protective", 
+                     ifelse(cvdr$Company_Symbol %in% c("LF"), "American_Income",
+                     ifelse(cvdr$Company_Symbol %in% c("B9", "FD"), "Banner", 
+                     ifelse(cvdr$Company_Symbol %in% c("SI"), "Country Life", 
+                     ifelse(cvdr$Company_Symbol %in% c("H22", "A66"), "SBLI", "Other")))))))
+
+cvdr2 <- cvdr %>%
+      filter( (mwk - request_date_by_week) ==0 & !(Company_Symbol %ilike% "^MIB" | Company_Symbol %ilike% "PEN$")) %>%
+      group_by(Company2, vendor_name, request_date_by_week) %>%
+      summarise(Request = sum(num_request_submitted, na.rm=FALSE),                                                     Hit=sum(num_requests_with_one_or_more_records_found),                                                  Req_w_Rls=sum(num_requests_with_one_or_more_records_released),
+                Release = sum(num_records_released)) %>%
+      mutate(Hit_Rate=Hit/Request, Release_Rate=Req_w_Rls/Request, Avg_Rls_Req = Release/Req_w_Rls) %>%
+      select(Company2, vendor_name, request_date_by_week, Request, Hit, Release, Req_w_Rls, Hit_Rate, Release_Rate, Avg_Rls_Req) %>%
+      arrange(desc(request_date_by_week), Company2, vendor_name)
+
+
+#transpose, fill missing with 0
+v<- pivot_wider(cvdr2, names_from = vendor_name, names_sort = TRUE, names_glue = "{vendor_name}_{.value}", values_from=c(Request, Hit, Release, Req_w_Rls, Hit_Rate, Release_Rate, Avg_Rls_Req), values_fill=0)
+
+names(v)<- str_replace_all(names(v), c("\\\r\\\n" = "." , "," = "", " "="_" ))
+
+v_temp <- v[, names(v) != "request_date_by_week"]
+# v <- cbind(v[, "request_date_by_week"], v_temp[, order(colnames(v_temp))])
+v <- v_temp[, order(colnames(v_temp))]
+
+
+# create totals for each vendor
+ vttl <- cvdr2 %>%
+        group_by(vendor_name) %>%
+        summarise(across(Request:Req_w_Rls, sum)) %>%
+        mutate(Hit_Rate=Hit/Request, Release_Rate=Req_w_Rls/Request,
+               Avg_Rls_Req = Release/Req_w_Rls) %>%
+        arrange(vendor_name)
+
+vtw<- pivot_wider(vttl, names_from = vendor_name, names_sort = TRUE, names_glue = "{vendor_name}_{.value}", values_from=c(Request, Hit, Release, Req_w_Rls, Hit_Rate, Release_Rate, Avg_Rls_Req), values_fill=0)
+
+names(vtw)<- str_replace_all(names(vtw), c("\\\r\\\n" = "." , "," = "", " "="_" ))
+
+vtw$Company2 <- "Grand Total"
+vtw <- vtw[, order(colnames(vtw))]
+
+v3 <- rbind(v, vtw)
+
+# colttl <- cbind(data.frame(request_date_by_week=as.Date(0)), vtw)
+# 
+# v3 <- rbind(v, colttl)
+
+
+# v3$request_week <- as.character(v3$request_date_by_week)
+# v3[which(as.Date(v3$request_week)==as.Date(0)),]$request_week <-"Grand Total"
+# 
+# Putting request week in the first position
+# v3 <- cbind(v3["request_week"], v3[, !(colnames(v3) %ilike% "week$")])
+
+
+v4 <- v3 %>%
+       mutate(across(.cols = ends_with("Rate"), ~percent_format(accuracy = 1)(.x))) %>%
+       mutate(across(.cols = ends_with("Avg_Rls_Req"), ~round(.x, digits = 1))) %>%
+       select(!ends_with(c("Hit", "Release", "Rls")))
+
+v4 %>%
+  #mutate(Total=cell_spec(Total, "html", bold=T, italic = T)) %>%
+   knitr::kable(caption="Table 3 Vendor Performance by Company", escape = FALSE,                                   col.names=c("Company",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request",
+                "Avg Release", "Hit Rate", "Release Rate", "Request"),
+                row.names = FALSE, align="c") %>%
+   add_header_above(c(" " = 1, "Epic"=4, "Healthx"=4, "Midwest Health"=4,
+                      "UHIN"=4, "Veradigm"=4)) %>%
+   kable_styling(full_width = F, position = "center", fixed_thead = list(enabled = T, background = "#ccffe6"), bootstrap_options=c("striped", "hover", "condensed", "responsive")) %>%
+#   column_spec(17, bold = F, border_left = T, background = "ivory") %>%
+   row_spec(8, bold= T, italic = T, background = "ivory")
+
+
+```
+
+<p style="color:blue;text-align:center;"> Data for the week of `r mwk` only </p>
+
+
+
+
+
 
 Row {data-height=800}
 -----------------------------------------------------------------------
@@ -498,7 +674,7 @@ Row {data-height=600}
 
 ```{r}
 
-ts<- xts(w[, 2:6], as.Date(w$Request_date_by_week))
+ts<- xts(w[, 2:7], as.Date(w$Request_date_by_week))
 
 #volume chart, multiple series
 highchart(type="stock", width = 300) %>%
@@ -510,6 +686,7 @@ highchart(type="stock", width = 300) %>%
   hc_add_series(name="Northwest Mutual", data=ts$NWM) %>%
   hc_add_series(name="Pacific Life", data=ts$Pacific_Life) %>%
   hc_add_series(name="Protective", data=ts$Protective) %>%
+  hc_add_series(name="Banner", data=ts$Banner) %>%
   hc_add_series(name="Other", data=ts$Other) %>%
   hc_add_theme(thm)
 
@@ -544,7 +721,7 @@ fn<- function(x) {x*100}
 grow3<- grow[which(!is.na(grow$Total)), ] %>%
        mutate(across(.cols = !(Request_date_by_week), ~fn(.x)))
 
-ts2<- xts(grow3[, 2:6], as.Date(grow3$Request_date_by_week))
+ts2<- xts(grow3[, 2:7], as.Date(grow3$Request_date_by_week))
 
 #volume chart, multiple series
 highchart(type="stock") %>%
