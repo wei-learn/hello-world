@@ -1,6 +1,6 @@
 # Correspondence Analysis
 library(readxl)
-Life_Index_Inquiry_by_Company_07_2020 <- read_excel("D:/Projects/EHR/Life_Index_Inquiry_by_Company_07_2020.xlsx", 
+Life_Index_Inquiry_by_Company_07_2020 <- read_excel("D:/xxx/xxx/xxx_07_2020.xlsx", 
                                                     sheet = "Life_Index_Inquiry_by_Company", 
                                                     col_types = c("numeric", "text", "date", 
                                                                   "numeric", "text", "text", "text", 
