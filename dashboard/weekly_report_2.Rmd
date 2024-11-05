@@ -1,5 +1,5 @@
 ---
-title: "MIB COVID-19 Weekly Dashboard"
+title: "COVID-19 Weekly Dashboard"
 # author: "Wei Fu"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output: 
